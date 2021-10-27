@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
           
-      - name: cppcheck
+      - name: cppcheck *.ino
         uses: deep5050/cppcheck-action@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN}}
