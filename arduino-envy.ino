@@ -2,6 +2,7 @@
 #include <ESP8266mDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include <EEPROM.h>
 
 #include <InfluxDbClient.h>
 #include <InfluxDbCloud.h>
@@ -10,14 +11,11 @@
 #include "Adafruit_SHT31.h"
 #include "WifiCredentials.h"
 
-#include <MQ2.h>
-
-
-//#define DEVICE_ID "arbeitszimmer"
+#define DEVICE_ID "arbeitszimmer"
 //#define DEVICE_ID "schlafen-kinder"
-#define DEVICE_ID "wc-gast"
+//#define DEVICE_ID "wc-gast"
 //#define DEVICE_ID "wohnzimmer"
-#define FW_VERSION "0.1.2"
+#define FW_VERSION "0.2.0_beta"
 
 
 
@@ -46,17 +44,13 @@ Point sensor("wifi_status");
 // SHT30 temperature / humidity
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
-// MQ2 sensor
-//change this with the pin that you use
-MQ2 mq2(A0);
-
-
 const char* ssid = STASSID;
 const char* password = STAPSK;
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Booting");
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
@@ -84,17 +78,13 @@ void setup() {
   if (! sht31.begin(0x44)) {   // Set to 0x45 for alternate i2c addr
     Serial.println("Couldn't find SHT31");
   }
-  Serial.print("Heater Enabled State: ");
-  if (sht31.isHeaterEnabled())
-    Serial.println("ENABLED");
-  else
-    Serial.println("DISABLED");
-
-    mq2.begin();
+  sht31.heater(false);
 }
 
 void loop() {
   ArduinoOTA.handle();
+
+  heaterState();
 
   // preparing influx data point
   // Clear fields for reusing the point. Tags will remain untouched
@@ -106,13 +96,7 @@ void loop() {
 
   // add sht30 data
   sensor.addField("temperature", sht31.readTemperature()-4);
-  sensor.addField("humidity", sht31.readHumidity());
-
-  // mq2 data
-  sensor.addField("lpg",mq2.readLPG());
-  sensor.addField("co",mq2.readCO());
-  sensor.addField("smoke",mq2.readSmoke());
-  
+  sensor.addField("humidity", sht31.readHumidity());  
 
   // Print what are we exactly writing
   Serial.print("Writing: ");
@@ -127,6 +111,14 @@ void loop() {
   //Wait 10s
   Serial.println("Wait 10s");
   delay(10000);
+}
+
+void heaterState(){
+Serial.print("Heater Enabled State: ");
+  if (sht31.isHeaterEnabled())
+    Serial.println("ENABLED");
+  else
+    Serial.println("DISABLED");
 }
 
 void checkOta(){
