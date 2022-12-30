@@ -8,23 +8,27 @@
 
 #include <Wire.h>
 #include "Adafruit_SHT31.h"
-#include "WifiCredentials.h"
 
-#include <MQ2.h>
+#include <EEPROM.h>
 
+void writeString(char add,String data);
+String read_String(char add);
 
-//#define DEVICE_ID "arbeitszimmer"
-//#define DEVICE_ID "schlafen-kinder"
-#define DEVICE_ID "wc-gast"
-//#define DEVICE_ID "wohnzimmer"
-#define FW_VERSION "0.1.2"
+/* EEPROM is used for storing device id and wifi credentials. Total size: 4k
+layout
+*/
+#define EEPROM_DEV_ID_ADDR      0
+#define EEPROM_WIFI_SSID_ADDR   64
+#define EEPROM_WIFI_PW_ADDR     128
+
+#define FW_VERSION "0.2.1"
 
 
 
 // InfluxDB v2 server url, e.g. https://eu-central-1-1.aws.cloud2.influxdata.com (Use: InfluxDB UI -> Load Data -> Client Libraries)
 #define INFLUXDB_URL "http://192.168.188.30:8086"
 // InfluxDB v2 server or cloud API authentication token (Use: InfluxDB UI -> Data -> Tokens -> <select token>)
-#define INFLUXDB_TOKEN "J0XwMfaMQHV-TQtKEjvaQz2sxkIyf-tPkMsu4xdIKjgUKga-ioyES4RMLG386TPEMANiEu9YFQbLivPEPnssaA=="
+#define INFLUXDB_TOKEN "-aVl1Fq7oQQJ_upIeDtyzOSq8ncpXGbFEi7r4mYKccoyWSyHNbkS7OgVFjblQryYLUq6Zms2lhgPfY1-XOAPbg=="
 // InfluxDB v2 organization id (Use: InfluxDB UI -> User -> About -> Common Ids )
 #define INFLUXDB_ORG "rs"
 // InfluxDB v2 bucket name (Use: InfluxDB UI ->  Data -> Buckets)
@@ -46,17 +50,21 @@ Point sensor("wifi_status");
 // SHT30 temperature / humidity
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
-// MQ2 sensor
-//change this with the pin that you use
-MQ2 mq2(A0);
-
-
-const char* ssid = STASSID;
-const char* password = STAPSK;
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Booting");
+  Serial.printf("Booting v%s\n", FW_VERSION);
+
+  EEPROM.begin(512);
+
+  // read from eeprom
+  String deviceID = readString(EEPROM_DEV_ID_ADDR);
+  Serial.printf("device id from eeprom: ");
+  Serial.println(deviceID);
+
+  String ssid = readString(EEPROM_WIFI_SSID_ADDR);
+  String password = readString(EEPROM_WIFI_PW_ADDR);
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
@@ -64,10 +72,10 @@ void setup() {
     delay(5000);
     ESP.restart();
   }
-  checkOta();
+  checkOta(deviceID);
 
   // configure influx
-  sensor.addTag("device", DEVICE_ID);
+  sensor.addTag("device", deviceID);
   sensor.addTag("SSID", ssid);
   sensor.addTag("version", FW_VERSION);
   timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
@@ -89,8 +97,6 @@ void setup() {
     Serial.println("ENABLED");
   else
     Serial.println("DISABLED");
-
-    mq2.begin();
 }
 
 void loop() {
@@ -105,14 +111,8 @@ void loop() {
   sensor.addField("rssi", WiFi.RSSI());
 
   // add sht30 data
-  sensor.addField("temperature", sht31.readTemperature()-4);
+  sensor.addField("temperature", sht31.readTemperature());
   sensor.addField("humidity", sht31.readHumidity());
-
-  // mq2 data
-  sensor.addField("lpg",mq2.readLPG());
-  sensor.addField("co",mq2.readCO());
-  sensor.addField("smoke",mq2.readSmoke());
-  
 
   // Print what are we exactly writing
   Serial.print("Writing: ");
@@ -129,12 +129,12 @@ void loop() {
   delay(10000);
 }
 
-void checkOta(){
+void checkOta(String deviceID){
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
 
   // Hostname defaults to esp8266-[ChipID]
-  ArduinoOTA.setHostname("esp8266"DEVICE_ID);
+  ArduinoOTA.setHostname(deviceID.c_str());
 
   // No authentication by default
   // ArduinoOTA.setPassword("admin");
@@ -178,4 +178,35 @@ void checkOta(){
   Serial.println("Ready !!");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+}
+
+// void writeString(char add,String data)
+// {
+//   int _size = data.length();
+//   int i;
+//   for(i=0;i<_size;i++)
+//   {
+//     EEPROM.write(add+i,data[i]);
+//   }
+//   EEPROM.write(add+_size,'\0');   //Add termination null character for String Data
+//   EEPROM.commit();
+//   delay(10);
+// }
+
+
+String readString(char add)
+{
+  int i;
+  char data[100]; //Max 100 Bytes
+  int len=0;
+  unsigned char k;
+  k=EEPROM.read(add);
+  while(k != '\0' && len<500)   //Read until null character
+  {    
+    k=EEPROM.read(add+len);
+    data[len]=k;
+    len++;
+  }
+  data[len]='\0';
+  return String(data);
 }
