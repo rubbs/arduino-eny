@@ -3,13 +3,12 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 
-#include <InfluxDbClient.h>
-#include <InfluxDbCloud.h>
-
 #include <Wire.h>
 #include "Adafruit_SHT31.h"
-
 #include <EEPROM.h>
+#include "WifiCredentials.h"
+
+#include <ArduinoMqttClient.h>
 
 void writeString(char add,String data);
 String read_String(char add);
@@ -21,35 +20,24 @@ layout
 #define EEPROM_WIFI_SSID_ADDR   64
 #define EEPROM_WIFI_PW_ADDR     128
 
-#define FW_VERSION "0.2.1"
 
-
-
-// InfluxDB v2 server url, e.g. https://eu-central-1-1.aws.cloud2.influxdata.com (Use: InfluxDB UI -> Load Data -> Client Libraries)
-#define INFLUXDB_URL "http://192.168.188.30:8086"
-// InfluxDB v2 server or cloud API authentication token (Use: InfluxDB UI -> Data -> Tokens -> <select token>)
-#define INFLUXDB_TOKEN "-aVl1Fq7oQQJ_upIeDtyzOSq8ncpXGbFEi7r4mYKccoyWSyHNbkS7OgVFjblQryYLUq6Zms2lhgPfY1-XOAPbg=="
-// InfluxDB v2 organization id (Use: InfluxDB UI -> User -> About -> Common Ids )
-#define INFLUXDB_ORG "rs"
-// InfluxDB v2 bucket name (Use: InfluxDB UI ->  Data -> Buckets)
-#define INFLUXDB_BUCKET "homeautomation"
-// Set timezone string according to https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html
-// Examples:
-//  Pacific Time: "PST8PDT"
-//  Eastern: "EST5EDT"
-//  Japanesse: "JST-9"
-//  Central Europe: "CET-1CEST,M3.5.0,M10.5.0/3"
-#define TZ_INFO "CET-1CEST,M3.5.0,M10.5.0/3"
-
-// InfluxDB client instance with preconfigured InfluxCloud certificate
-InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert);
-
-// Data point
-Point sensor("wifi_status");
+//#define DEVICE_ID "arbeitszimmer"
+//#define DEVICE_ID "schlafen-kinder"
+//#define DEVICE_ID "schlafen-eltern"
+//#define DEVICE_ID "wc-gast"
+//#define DEVICE_ID "wohnzimmer"
+#define DEVICE_ID "unknown"
+#define FW_VERSION "0.3.0"
 
 // SHT30 temperature / humidity
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
+WiFiClient wifiClient;
+MqttClient mqttClient(wifiClient);
+const char broker[] = "192.168.1.200";
+int        port     = 1883;
+
+String deviceID = "";
 
 void setup() {
   Serial.begin(115200);
@@ -57,8 +45,10 @@ void setup() {
 
   EEPROM.begin(512);
 
+  Serial.println("EEPROM started");
+
   // read from eeprom
-  String deviceID = readString(EEPROM_DEV_ID_ADDR);
+  deviceID = readString(EEPROM_DEV_ID_ADDR);
   Serial.printf("device id from eeprom: ");
   Serial.println(deviceID);
 
@@ -74,19 +64,20 @@ void setup() {
   }
   checkOta(deviceID);
 
-  // configure influx
-  sensor.addTag("device", deviceID);
-  sensor.addTag("SSID", ssid);
-  sensor.addTag("version", FW_VERSION);
-  timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
-  // Check server connection
-  if (client.validateConnection()) {
-    Serial.print("Connected to InfluxDB: ");
-    Serial.println(client.getServerUrl());
-  } else {
-    Serial.print("InfluxDB connection failed: ");
-    Serial.println(client.getLastErrorMessage());
+  Serial.print("Attempting to connect to the MQTT broker: ");
+  Serial.println(broker);
+
+  if (!mqttClient.connect(broker, port)) {
+    Serial.print("MQTT connection failed! Error code = ");
+    Serial.println(mqttClient.connectError());
+
+    while (1);
   }
+
+  Serial.println("You're connected to the MQTT broker!");
+  Serial.println();
+
+  publishMqttStr("fwversion", FW_VERSION);
 
   // start sht30 
   if (! sht31.begin(0x44)) {   // Set to 0x45 for alternate i2c addr
@@ -101,32 +92,44 @@ void setup() {
 
 void loop() {
   ArduinoOTA.handle();
-
-  // preparing influx data point
-  // Clear fields for reusing the point. Tags will remain untouched
-  sensor.clearFields();
+  // call poll() regularly to allow the library to send MQTT keep alives which
+  // avoids being disconnected by the broker
+  mqttClient.poll();
 
   // Store measured value into point
   // Report RSSI of currently connected network
-  sensor.addField("rssi", WiFi.RSSI());
+  publishMqtt("rssi", WiFi.RSSI());
 
   // add sht30 data
-  sensor.addField("temperature", sht31.readTemperature());
-  sensor.addField("humidity", sht31.readHumidity());
-
-  // Print what are we exactly writing
-  Serial.print("Writing: ");
-  Serial.println(sensor.toLineProtocol());
-
-  // Write point
-  if (!client.writePoint(sensor)) {
-    Serial.print("InfluxDB write failed: ");
-    Serial.println(client.getLastErrorMessage());
-  }
+  float temperature = sht31.readTemperature();
+  publishMqtt("temperature", temperature);
+  publishMqtt("humidity", sht31.readHumidity());  
 
   //Wait 10s
   Serial.println("Wait 10s");
   delay(10000);
+}
+
+void publishMqtt(String name, float value) {
+  Serial.printf("publish %s: %f\n", name.c_str(), value);
+
+  String topic = "telemetry/arduino-" + deviceID + "/" + name;
+
+  // send message, the Print interface can be used to set the message contents
+  mqttClient.beginMessage(topic.c_str());
+  mqttClient.print(value);
+  mqttClient.endMessage();
+}
+
+void publishMqttStr(String name, String value) {
+  Serial.printf("publish %s: %s\n", name.c_str(), value.c_str());
+
+  String topic = "telemetry/arduino-" + deviceID + "/" + name;
+
+  // send message, the Print interface can be used to set the message contents
+  mqttClient.beginMessage(topic.c_str());
+  mqttClient.print(value);
+  mqttClient.endMessage();
 }
 
 void checkOta(String deviceID){
@@ -180,27 +183,38 @@ void checkOta(String deviceID){
   Serial.println(WiFi.localIP());
 }
 
-// void writeString(char add,String data)
-// {
-//   int _size = data.length();
-//   int i;
-//   for(i=0;i<_size;i++)
-//   {
-//     EEPROM.write(add+i,data[i]);
-//   }
-//   EEPROM.write(add+_size,'\0');   //Add termination null character for String Data
-//   EEPROM.commit();
-//   delay(10);
-// }
+void initEEPROM(){
+  writeString(EEPROM_DEV_ID_ADDR, DEVICE_ID);
+  writeString(EEPROM_WIFI_SSID_ADDR, STASSID);
+  writeString(EEPROM_WIFI_PW_ADDR, STAPSK);
+}
+
+void writeString(char add,String data)
+{
+  int _size = data.length();
+  int i;
+  for(i=0;i<_size;i++)
+  {
+    EEPROM.write(add+i,data[i]);
+  }
+  EEPROM.write(add+_size,'\0');   //Add termination null character for String Data
+  EEPROM.commit();
+  delay(10);
+}
 
 
 String readString(char add)
 {
-  int i;
   char data[100]; //Max 100 Bytes
   int len=0;
   unsigned char k;
   k=EEPROM.read(add);
+  //Serial.printf("read char %c, %d\n", k,k);
+  if(k == 255){
+    Serial.println("EEPROM seems to be empty, start initializinng it");
+    initEEPROM();
+    k = EEPROM.read(add);
+  }
   while(k != '\0' && len<500)   //Read until null character
   {    
     k=EEPROM.read(add+len);
