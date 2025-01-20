@@ -1,0 +1,11 @@
+profiles:
+  abc:
+    fqbn: esp8266:esp8266:nodemcu
+    platforms:
+      - platform: esp8266:esp8266 (3.1.2)
+        platform_index_url: http://arduino.esp8266.com/stable/package_esp8266com_index.json
+    libraries:
+      - Adafruit SHT31 Library (2.2.2)
+      - Adafruit BusIO (1.17.0)
+      - ArduinoMqttClient (0.1.8)
+default_profile: abc

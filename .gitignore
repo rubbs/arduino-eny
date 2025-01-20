@@ -1,1 +1,3 @@
 WifiCredentials.h
+.arduino*
+.bash_history

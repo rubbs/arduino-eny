@@ -4,7 +4,7 @@
 #include <ArduinoOTA.h>
 
 #include <Wire.h>
-#include "Adafruit_SHT31.h"
+#include <Adafruit_SHT31.h>
 #include <EEPROM.h>
 #include "WifiCredentials.h"
 
@@ -185,8 +185,8 @@ void checkOta(String deviceID){
 
 void initEEPROM(){
   writeString(EEPROM_DEV_ID_ADDR, DEVICE_ID);
-  writeString(EEPROM_WIFI_SSID_ADDR, STASSID);
-  writeString(EEPROM_WIFI_PW_ADDR, STAPSK);
+  // writeString(EEPROM_WIFI_SSID_ADDR, STASSID);
+  // writeString(EEPROM_WIFI_PW_ADDR, STAPSK);
 }
 
 void writeString(char add,String data)
